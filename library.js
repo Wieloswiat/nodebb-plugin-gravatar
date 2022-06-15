@@ -4,121 +4,94 @@ var user = require.main.require('./src/user'),
 	meta = require.main.require('./src/meta'),
 	db = require.main.require('./src/database'),
 	winston = require.main.require('winston'),
-	async = require('async'),
 	crypto = require('crypto'),
 
 	controllers = require('./lib/controllers'),
 	plugin = {};
 
-plugin.init = function(params, callback) {
-	var router = params.router,
-		hostMiddleware = params.middleware,
-		hostControllers = params.controllers;
-
-	router.get('/admin/plugins/gravatar', hostMiddleware.admin.buildHeader, controllers.renderAdminPage);
+plugin.init = async function({router, middleware}) {
+	router.get('/admin/plugins/gravatar', middleware.admin.buildHeader, controllers.renderAdminPage);
 	router.get('/api/admin/plugins/gravatar', controllers.renderAdminPage);
-
-	meta.settings.get('gravatar', function(err, settings) {
-		if (err) {
-			winston.error('[plugin/gravatar] Could not retrieve plugin settings! Using defaults.');
-			plugin.settings = {
-				default: false,
-				force: false
-			};
-			return;
-		}
-
-		plugin.settings = settings;
-	});
-
-	callback();
+	try {
+		plugin.settings = meta.settings.get('gravatar')
+	}
+	catch {
+		winston.error('[plugin/gravatar] Could not retrieve plugin settings! Using defaults.');
+		plugin.settings = {
+			default: false,
+			force: false
+		};
+	}
 };
 
-plugin.addAdminNavigation = function(header, callback) {
+plugin.addAdminNavigation = async function(header) {
 	header.plugins.push({
 		route: '/plugins/gravatar',
 		icon: 'fa-picture',
 		name: 'Gravatar'
 	});
 
-	callback(null, header);
+	return header
 };
 
-plugin.list = function(data, callback) {
-	user.getUserFields(data.uid, ['email', 'username'], function(err, userData) {
-		data.pictures.push({
-			type: 'gravatar',
-			url: getGravatarUrl(userData.email, userData.username),
-			text: 'Gravatar'
-		});
-
-		callback(null, data);
-	});
+plugin.list = async function(data) {
+	const userData = await user.getUserFields(data.uid, ['email', 'username'])
+	data.pictures.push({
+		type: 'gravatar',
+		url: getGravatarUrl(userData.email, userData.username),
+		text: 'Gravatar'
+	})
+	return data;
 };
 
-plugin.get = function(data, callback) {
+plugin.get = async function(data) {
 	if (data.type === 'gravatar') {
-		user.getUserFields(data.uid, ['email', 'username'], function(err, userData) {
-			data.picture = getGravatarUrl(userData.email, userData.username);
-			callback(null, data);
-		});
-	} else {
-		callback(null, data);
+		const userData = await user.getUserFields(data.uid, ['email', 'username'])
+		data.picture = getGravatarUrl(userData.email, userData.username);
 	}
+	return data;
 };
 
-plugin.updateUser = function(data, callback) {
+plugin.updateUser = async function(data) {
 	if (plugin.settings.default === 'on') {
 		winston.verbose('[plugin/gravatar] Updating uid ' + data.user.uid + ' to use gravatar');
-		data.user.picture = getGravatarUrl(data.user.email, data.user.username);
-		callback(null, data);
-	} else {
-		// No transformation
-		callback(null, data);
+		data.user.picture = getGravatarUrl(data.user.email, data.user.username);	
 	}
+	return data;
 };
 
-plugin.onForceEnabled = function(users, callback) {
+plugin.onForceEnabled = async function(users) {
 	if (plugin.hasOwnProperty('settings') && plugin.settings.force === 'on') {
-		async.map(users, function(userObj, next) {
+		users = await Promise.all(users.map(async function(userObj) {
 			if (!userObj) {
-				return next(null, userObj);
+				return userObj;
 			}
 
 			if (!userObj.email) {
-				db.getObjectField('user:' + userObj.uid, 'email', function(err, email) {
-					userObj.picture = getGravatarUrl(email, userObj.username);
-					next(null, userObj);
-				});
+				const email = await db.getObjectField('user:' + userObj.uid, 'email')
+				userObj.picture = getGravatarUrl(email, userObj.username);
 			} else {
 				userObj.picture = getGravatarUrl(userObj.email, userObj.username);
-				next(null, userObj);
 			}
-		}, callback);
+			return userObj
+		}));
 	} else if (plugin.hasOwnProperty('settings') && plugin.settings.default === 'on') {
-		async.map(users, function(userObj, next) {
+		users = await Promise.all(users.map(async function(userObj) {
 			if (!userObj) {
-				return next(null, userObj);
+				return userObj;
 			}
-
 			if (userObj.picture === null || userObj.picture === '') {
 				if (!userObj.email) {
-					db.getObjectField('user:' + userObj.uid, 'email', function(err, email) {
-						userObj.picture = getGravatarUrl(email, userObj.username);
-						next(null, userObj);
-					});
+					const email = await db.getObjectField('user:' + userObj.uid, 'email')
+					userObj.picture = getGravatarUrl(email, userObj.username);
 				} else {
 					userObj.picture = getGravatarUrl(userObj.email, userObj.username);
-					next(null, userObj);
 				}
-			} else {
-				setImmediate(next, null, userObj);
 			}
-		}, callback);
-	} else {
-		// No transformation
-		callback(null, users);
+			return userObj;
+		}));
 	}
+	return users;
 }
 
 function getGravatarUrl(userEmail, username) {

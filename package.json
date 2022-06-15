@@ -23,8 +23,5 @@
   "readmeFilename": "README.md",
   "nbbpm": {
     "compatibility": "^2.0.0"
-  },
-  "dependencies": {
-    "async": "^3.2.0"
   }
 }
